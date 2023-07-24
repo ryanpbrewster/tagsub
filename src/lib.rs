@@ -147,11 +147,48 @@ mod test {
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
+    #[test]
+    fn tree_scanner_handles_missing_filter_tags() {
+        let mut topic = TreeScanner::default();
+        let count = Arc::new(AtomicU32::default());
+        topic.subscribe(
+            Counter(count.clone()),
+            Filter {
+                tags: vec![("a".to_owned(), mkset(vec!["foo"]))]
+                    .into_iter()
+                    .collect(),
+            },
+        );
+        topic.subscribe(
+            Counter(count.clone()),
+            Filter {
+                tags: vec![("b".to_owned(), mkset(vec!["foo"]))]
+                    .into_iter()
+                    .collect(),
+            },
+        );
+
+        let evt = Event {
+            tags: vec![
+                ("a".to_owned(), "foo".to_owned()),
+                ("b".to_owned(), "foo".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        topic.accept(&evt);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
     #[derive(Default)]
     struct Counter(Arc<AtomicU32>);
     impl Listener for Counter {
         fn accept(&mut self, _evt: &Event) {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
+    }
+
+    fn mkset(xs: Vec<&str>) -> BTreeSet<String> {
+        xs.into_iter().map(|x| x.to_owned()).collect()
     }
 }
