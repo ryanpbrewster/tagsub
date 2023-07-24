@@ -17,6 +17,11 @@ pub trait Topic<L: Listener> {
 pub struct Filter {
     pub tags: BTreeMap<String, BTreeSet<String>>,
 }
+impl Filter {
+    pub const EMPTY: Filter = Filter {
+        tags: BTreeMap::new(),
+    };
+}
 
 #[derive(Default)]
 pub struct LinearScan<L: Listener> {
@@ -134,33 +139,36 @@ mod test {
 
     use super::*;
 
+    macro_rules! mkset {
+        ($($x:expr),+ $(,)?) => {{
+            let mut s = BTreeSet::new();
+            $( s.insert($x.to_owned());)+
+            s
+        }};
+    }
+    macro_rules! mkevt {
+        ($($tag:expr => $value:expr),* $(,)?) => {{
+            let mut tags = BTreeMap::new();
+            $( tags.insert($tag.to_owned(), $value.to_owned()); )*
+            Event { tags }
+        }};
+    }
+    macro_rules! mkfilter {
+        ($($tag:expr => [$($value:expr),+]),+ $(,)?) => {{
+            let mut tags = BTreeMap::new();
+            $( tags.insert($tag.to_owned(), mkset!($($value)*)); )*
+            Filter { tags }
+        }};
+    }
+
     #[test]
     fn tree_scanner_smoke_test() {
         let mut topic = TreeScanner::default();
         let count = Arc::new(AtomicU32::default());
-        topic.subscribe(
-            Counter(count.clone()),
-            Filter {
-                tags: BTreeMap::new(),
-            },
-        );
-        topic.subscribe(
-            Counter(count.clone()),
-            Filter {
-                tags: vec![(
-                    "hello".to_owned(),
-                    vec!["world".to_owned()].into_iter().collect(),
-                )]
-                .into_iter()
-                .collect(),
-            },
-        );
+        topic.subscribe(Counter(count.clone()), Filter::EMPTY);
+        topic.subscribe(Counter(count.clone()), mkfilter! { "hello" => ["world"] });
 
-        let evt = Event {
-            tags: vec![("hello".to_owned(), "world".to_owned())]
-                .into_iter()
-                .collect(),
-        };
+        let evt = mkevt! {"hello" => "world"};
         topic.accept(&evt);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
@@ -169,30 +177,12 @@ mod test {
     fn tree_scanner_handles_missing_filter_tags() {
         let mut topic = TreeScanner::default();
         let count = Arc::new(AtomicU32::default());
-        topic.subscribe(
-            Counter(count.clone()),
-            Filter {
-                tags: vec![("a".to_owned(), mkset(vec!["foo"]))]
-                    .into_iter()
-                    .collect(),
-            },
-        );
-        topic.subscribe(
-            Counter(count.clone()),
-            Filter {
-                tags: vec![("b".to_owned(), mkset(vec!["foo"]))]
-                    .into_iter()
-                    .collect(),
-            },
-        );
+        topic.subscribe(Counter(count.clone()), mkfilter! { "a" => ["foo"] });
+        topic.subscribe(Counter(count.clone()), mkfilter! { "b" => ["foo"] });
 
-        let evt = Event {
-            tags: vec![
-                ("a".to_owned(), "foo".to_owned()),
-                ("b".to_owned(), "foo".to_owned()),
-            ]
-            .into_iter()
-            .collect(),
+        let evt = mkevt! {
+            "a" => "foo",
+            "b" => "foo"
         };
         topic.accept(&evt);
         assert_eq!(count.load(Ordering::SeqCst), 2);
@@ -204,9 +194,5 @@ mod test {
         fn accept(&mut self, _evt: &Event) {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-    }
-
-    fn mkset(xs: Vec<&str>) -> BTreeSet<String> {
-        xs.into_iter().map(|x| x.to_owned()).collect()
     }
 }
