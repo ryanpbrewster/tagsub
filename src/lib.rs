@@ -52,6 +52,8 @@ pub struct TreeScanner<L: Listener> {
 struct TagTree<L: Listener> {
     // Listeners that are interested in any event that makes it this far into the pipeline.
     interested: Vec<L>,
+    // Listeners that do not care about this particular tag in the pipeline, but want to be filtered on the subsequent ones.
+    passthrough: Option<Box<TagTree<L>>>,
     // Otherwise, keep proceeding down the tag pipeline.
     children: BTreeMap<String, TagTree<L>>,
 }
@@ -59,6 +61,7 @@ impl<L: Listener> TagTree<L> {
     fn new() -> Self {
         Self {
             interested: Vec::new(),
+            passthrough: None,
             children: BTreeMap::new(),
         }
     }
@@ -79,7 +82,11 @@ impl<L: Listener> Topic<L> for TreeScanner<L> {
         let mut cur = &mut self.root;
         for key in self.pipeline.iter().take(filter.tags.len()) {
             let Some(vs) = filter.tags.get(key) else {
-                panic!("filter is missing required key {}", key)
+                if cur.passthrough.is_none() {
+                    cur.passthrough = Some(Box::new(TagTree::new()));
+                }
+                cur = cur.passthrough.as_deref_mut().unwrap();
+                continue;
             };
             if vs.len() != 1 {
                 todo!("unsupported tag filter: {} = {:?}", key, vs);
@@ -92,17 +99,28 @@ impl<L: Listener> Topic<L> for TreeScanner<L> {
 }
 impl<T: Listener> Listener for TreeScanner<T> {
     fn accept(&mut self, evt: &Event) {
-        let mut cur = &mut self.root;
-        for listener in cur.interested.iter_mut() {
-            listener.accept(evt);
-        }
+        let mut cur = vec![&mut self.root];
         for key in &self.pipeline {
-            let Some(v) = evt.tags.get(key) else { break };
-            let Some(next) = cur.children.get_mut(v) else { break };
-            for listener in next.interested.iter_mut() {
-                listener.accept(evt);
+            let mut next = Vec::new();
+            for c in cur {
+                for listener in c.interested.iter_mut() {
+                    listener.accept(evt);
+                }
+                if let Some(passthrough) = c.passthrough.as_deref_mut() {
+                    next.push(passthrough);
+                }
+                if let Some(v) = evt.tags.get(key) {
+                    if let Some(child) = c.children.get_mut(v) {
+                        next.push(child);
+                    }
+                }
             }
             cur = next;
+        }
+        for c in cur {
+            for listener in c.interested.iter_mut() {
+                listener.accept(evt);
+            }
         }
     }
 }
